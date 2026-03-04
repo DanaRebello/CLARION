@@ -39,7 +39,8 @@ openai.api_key = OPENAI_API_KEY
 #-------------------------------------------------------------------------------------
 #ENV variables
 embeddings_deployment = os.getenv("embeddings_deployment")
-DB_CHROMA_PATH = './vectorstore/db_chroma'
+DB_CHROMA_JOB_PATH = './vectorstore/db_chroma_Job'
+DB_CHROMA_RESUME_PATH = './vectorstore/db_chroma_Resume'
 openai.api_type = api_type
 openai.api_version = api_version
 openai.api_base = api_base
@@ -214,7 +215,7 @@ def is_logged_in(user_type=None):
     if user_type and session['type'] != user_type:
         return False
     return True
-def chatbot(query,chat_history):
+def chatbot(query,chat_history,DB_Chroma_PATH):
     #env variables
     temperature = float(os.getenv("TEMPRATURE"))
     chat_completion_deployment = os.getenv("chat_completion_deployment")#'Dhi_GPT35turbo'
@@ -239,8 +240,7 @@ def chatbot(query,chat_history):
                 openai_api_type = openai.api_type,
                 chunk_size = embeddings_chunk_size
                 )
-    # Define the path for generated embeddings
-    DB_Chroma_PATH = './vectorstore/db_chroma'
+    
     db = Chroma(persist_directory=DB_Chroma_PATH, embedding_function=embeddings)
     print("opendb")
     llm = load_llm()
@@ -250,8 +250,40 @@ def chatbot(query,chat_history):
     result = chain({"question": query,"chat_history":chat_history})
     print(result["answer"])
     return result["answer"]
+def extractpdf(pdffile,chunksize,overlap):
+        DB_CHROMA_PATH= './vectorstore/db_chroma_Resume'
+        currentfilename = os.path.basename(pdffile)
+        docswithmeta = list() 
+        # Initialize the text variable
+        text = ''
+        all_texts = []
+        reader = PdfReader(pdffile)
+        for i in range(len(reader.pages)):
+            text =  reader.pages[i].extract_text()
+            docswithmeta.append(Document(page_content=text, metadata={"source_document": currentfilename,"pageno":int(i)+1},Type="Document"))
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size = chunksize,
+            chunk_overlap = overlap)
+        texts = text_splitter.split_text(text)
+        print("Text splitted")
+        all_texts.extend(texts)
+        docs = text_splitter.split_documents(docswithmeta)
 
-
+        metadatas = [{"source": f"{i}-pl"} for i in range(len(all_texts))] 
+        print("embedding generated")
+        embeddings = AzureOpenAIEmbeddings(
+        deployment = embeddings_deployment,
+        openai_api_key = openai.api_key,
+        azure_endpoint = openai.api_base,
+        openai_api_version = openai.api_version,
+        openai_api_type = openai.api_type,
+        chunk_size = chunksize)
+        #db = Chroma.from_documents(docs,embeddings,persist_directory=DB_CHROMA_PATH)
+        db = Chroma(persist_directory=DB_CHROMA_PATH,embedding_function=embeddings)
+        db.add_documents(docs)
+        db.persist()
+        
+        return db
 # ================= HOME & AUTH =================
 @app.route('/')
 def home():
@@ -415,7 +447,7 @@ def candidate_login():
     </html>
     """)
 
-@app.route('/candidate/dashboard')
+@app.route('/candidate/dashboard',methods=["GET", "POST"])
 def candidate_dashboard():
     if not is_logged_in('candidate'):
         return redirect('/candidate/login')
@@ -447,6 +479,28 @@ def candidate_dashboard():
     SELECT job_id FROM applications WHERE candidate_id = ?
     """, (session['user'],)).fetchall()
     applied_ids = {a['job_id'] for a in applied}
+    # -------- CHATBOT LOGIC --------
+    DB_Chroma_PATH = './vectorstore/db_chroma_Job'
+
+    if "chat_history" not in session:
+        session["chat_history"] = []
+
+    if request.method == "POST":
+        user_query = request.form.get("query")
+
+        if user_query:
+            history_for_llm = []
+            for chat in session["chat_history"]:
+                history_for_llm.append((chat["question"], chat["response"]))
+
+            response = chatbot(user_query, history_for_llm, DB_Chroma_PATH)
+
+            session["chat_history"].append({
+            "question": user_query,
+            "response": response
+             })
+
+            session.modified = True
     
     return render_template_string("""
     <!DOCTYPE html>
@@ -476,7 +530,6 @@ def candidate_dashboard():
     <body>
         <div class="header">
             <h1>Candidate Dashboard</h1>
-            <a href="/candidate/chatbot" class="btn btn-success" style="margin-left:20px;">Chatbot</a>
             <a href="/logout" class="logout">Logout</a>
         </div>
         
@@ -562,69 +615,64 @@ def candidate_dashboard():
                     <p>No jobs available at the moment.</p>
                 {% endif %}
             </div>
-        </div>
-    </body>
-    </html>
-    """, cand=cand, jobs=jobs, notifs=notifs, applied_ids=applied_ids)
+              <!-- AI Job Assistant -->
+<div class="section">
+    <h2> AI Job Assistant</h2>
 
-@app.route("/candidate/chatbot", methods=["GET", "POST"])
-def candidate_chatbot():
-    if not is_logged_in('candidate'):
-        return redirect('/candidate/login')
-    if "chat_history" not in session:
-        session["chat_history"] = []
-
-    response = ""
-
-    if request.method == "POST":
-        user_query = request.form.get("query")
-        history_for_llm = []
-        for chat in session["chat_history"]:
-            history_for_llm.append((chat["question"], chat["response"]))
-        response = chatbot(user_query,history_for_llm)
-        session["chat_history"].append({
-            "question": user_query,
-            "response": response })
-
-    session.modified = True
-
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>AI Chatbot</title>
-        <style>
-            body { font-family: Arial; background:#f5f5f5; padding:40px; }
-            .chat-box { background:white; padding:20px; border-radius:8px; max-width:800px; margin:auto; }
-            textarea { width:100%; padding:10px; }
-            .response { background:#e9ecef; padding:10px; margin-top:15px; border-radius:6px; }
-            .btn { padding:8px 16px; background:#007bff; color:white; border:none; border-radius:4px; }
-            .back { display:inline-block; margin-top:15px; }
-        </style>
-    </head>
-    <body>
-        <div class="chat-box">
-            <h2>AI Assistant</h2>
-            <form method="POST">
-                <textarea name="query" rows="4" placeholder="Ask something..."></textarea><br><br>
-                <button type="submit" class="btn">Send</button>
-            </form>
-
-            {% for chat in session.get('chat_history', []) %}
-            <div class="response">
-             <strong>Question:</strong><br>
-             {{ chat.question }}<br><br>
-             <strong>Response:</strong><br>
-             {{ chat.response }}
+    <div style="
+        border:1px solid #ddd;
+        height:350px;
+        overflow-y:auto;
+        padding:15px;
+        background:#fafafa;
+        border-radius:10px;
+        margin-bottom:15px;
+    ">
+        {% for chat in chat_history %}
+            <div style="margin-bottom:10px; text-align:right;">
+                <div style="
+                    display:inline-block;
+                    background:#d1e7dd;
+                    padding:8px 12px;
+                    border-radius:15px;
+                ">
+                    {{ chat.question }}
+                </div>
             </div>
-            {% endfor %}
 
-            <a href="/candidate/dashboard" class="back">⬅ Back to Dashboard</a>
+            <div style="margin-bottom:15px; text-align:left;">
+                <div style="
+                    display:inline-block;
+                    background:#e2e3e5;
+                    padding:8px 12px;
+                    border-radius:15px;
+                ">
+                    {{ chat.response }}
+                </div>
+            </div>
+        {% endfor %}
+
+        {% if not chat_history %}
+            <p style="color:gray;">Ask about jobs, required skills, or career suggestions...</p>
+        {% endif %}
+    </div>
+
+    <form method="POST">
+        <input type="text"
+               name="query"
+               placeholder="Ask about jobs..."
+               style="width:85%; padding:10px; border-radius:6px; border:1px solid #ccc;"
+               required>
+        <button type="submit"
+                class="btn btn-primary">
+            Send
+        </button>
+    </form>
+</div>
         </div>
     </body>
     </html>
-    """, response=response)
-
+    """, cand=cand, jobs=jobs, notifs=notifs, applied_ids=applied_ids,chat_history=session["chat_history"])
 
 @app.route('/candidate/update', methods=['POST'])
 def update_candidate():
@@ -635,8 +683,16 @@ def update_candidate():
     file = request.files.get('resume')
     if file and file.filename:
         if file.filename.endswith('.pdf'):
-            path = os.path.join(UPLOAD_FOLDER, f"candidate_{session['user']}.pdf")
-            file.save(path)
+            #path = os.path.join(UPLOAD_FOLDER, f"candidate_{session['user']}.pdf")
+            full_path = os.path.join(
+                UPLOAD_FOLDER,
+                f"candidate_{session['user']}.pdf"
+            )
+            path=full_path
+            file.save(full_path)
+            print("Saved at:",full_path)
+            DB_CHROMA_PATH= './vectorstore/db_chroma_Resume'
+            extractpdf(full_path,1000,10)
         else:
             return "Only PDF files are allowed for resumes"
     
@@ -837,7 +893,7 @@ def recruiter_login():
     </html>
     """)
 
-@app.route('/recruiter/dashboard')
+@app.route('/recruiter/dashboard',methods=["GET", "POST"])
 def recruiter_dashboard():
     if not is_logged_in('recruiter'):
         return redirect('/recruiter/login')
@@ -857,6 +913,29 @@ def recruiter_dashboard():
     JOIN jobs j ON a.job_id = j.id
     WHERE j.recruiter_id = ?
     """, (session['user'],)).fetchone()[0]
+    # ===== CHATBOT MEMORY =====
+    if "recruiter_chat_history" not in session:
+        session["recruiter_chat_history"] = []
+
+    if request.method == "POST":
+        user_query = request.form.get("query")
+
+        if user_query:
+            DB_Chroma_PATH = './vectorstore/db_chroma_Resume'
+
+            history_for_llm = []
+            for chat in session["recruiter_chat_history"]:
+                history_for_llm.append((chat["question"], chat["response"]))
+
+            response = chatbot(user_query, history_for_llm, DB_Chroma_PATH)
+
+            session["recruiter_chat_history"].append({
+                "question": user_query,
+                "response": response
+            })
+
+            session.modified = True
+
     
     return render_template_string("""
     <!DOCTYPE html>
@@ -970,10 +1049,55 @@ def recruiter_dashboard():
                     <p>You haven't posted any jobs yet.</p>
                 {% endif %}
             </div>
+                <!-- AI Hiring Assistant Section -->
+<div class="section">
+    <h2>AI Hiring Assistant</h2>
+
+    <div style="
+        border:1px solid #ddd;
+        height:300px;
+        overflow-y:auto;
+        padding:10px;
+        background:#fafafa;
+        border-radius:8px;
+        margin-bottom:15px;
+    ">
+
+        {% for chat in chat_history %}
+            <div style="margin-bottom:8px;">
+                <strong>You:</strong> {{ chat.question }}
+            </div>
+            <div style="margin-bottom:12px; color:#007bff;">
+                <strong>AI:</strong> {{ chat.response }}
+            </div>
+            <hr>
+        {% endfor %}
+
+        {% if not chat_history %}
+            <p style="color:gray;">Ask about candidates based on skills, experience, etc.</p>
+        {% endif %}
+    </div>
+
+    <form method="POST">
+        <input type="text"
+               name="query"
+               placeholder="Ask about candidates..."
+               style="width:80%; padding:8px;"
+               required>
+        <button type="submit" class="btn btn-primary">
+            Send
+        </button>
+    </form>
+</div>
         </div>
     </body>
     </html>
-    """, jobs=jobs, total_apps=total_apps)
+    """, jobs=jobs, total_apps=total_apps,chat_history=session["recruiter_chat_history"])
+
+@app.route("/recruiter/clear_chat")
+def clear_recruiter_chat():
+    session.pop("recruiter_chat_history", None)
+    return redirect("/recruiter/chatbot")
 
 @app.route('/post_job', methods=['POST'])
 def post_job():
@@ -1013,7 +1137,11 @@ def post_job():
         openai_api_version = openai.api_version,
         openai_api_type = openai.api_type,
         chunk_size = chunksize)
-        db = Chroma.from_documents(docs,embeddings,persist_directory=DB_CHROMA_PATH)
+        DB_Chroma_PATH = './vectorstore/db_chroma_Job'
+        #db = Chroma.from_documents(docs,embeddings,persist_directory=DB_Chroma_PATH)
+        db = Chroma(persist_directory=DB_Chroma_PATH,embedding_function=embeddings)
+        db.add_documents(docs)
+        db.persist() 
         print("Chroma executed")
 
 
