@@ -26,7 +26,7 @@ app.secret_key = "your_secret_key_here_change_this_in_production"
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 api_base = os.getenv("API_BASE")
-#api_key = "3269a84ee26342b2bdd7b8eb24fb463d"
+#api_key = 
 api_type = os.getenv("API_TYPE")
 api_version = os.getenv("API_VERSION")
 #-------------------------------------------------------------------------------------
@@ -34,7 +34,7 @@ api_version = os.getenv("API_VERSION")
 #default_credential = DefaultAzureCredential()
 OPENAI_API_TYPE = "azure_ad"
 openai.api_type = OPENAI_API_TYPE
-OPENAI_API_KEY = 'c6c3a1b1fd5e4fc599614a4c9dea8ccf'#default_credential.get_token("https://cognitiveservices.azure.com/.default").token
+OPENAI_API_KEY = ''#default_credential.get_token("https://cognitiveservices.azure.com/.default").token
 openai.api_key = OPENAI_API_KEY
 #-------------------------------------------------------------------------------------
 #ENV variables
@@ -1363,3 +1363,4 @@ if __name__ == "__main__":
     
     # Configure Flask to use single thread mode for SQLite
     app.run(debug=True, port=8080, host='0.0.0.0', threaded=False)
+
