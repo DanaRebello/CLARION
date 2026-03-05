@@ -34,7 +34,7 @@ api_version = os.getenv("API_VERSION")
 #default_credential = DefaultAzureCredential()
 OPENAI_API_TYPE = "azure_ad"
 openai.api_type = OPENAI_API_TYPE
-OPENAI_API_KEY = ''#default_credential.get_token("https://cognitiveservices.azure.com/.default").token
+OPENAI_API_KEY = ''
 openai.api_key = OPENAI_API_KEY
 #-------------------------------------------------------------------------------------
 #ENV variables
@@ -1363,4 +1363,5 @@ if __name__ == "__main__":
     
     # Configure Flask to use single thread mode for SQLite
     app.run(debug=True, port=8080, host='0.0.0.0', threaded=False)
+
 
